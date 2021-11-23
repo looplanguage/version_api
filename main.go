@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/jmoiron/sqlx"
+	_ "github.com/mattn/go-sqlite3"
 	"log"
 	"net/http"
 	"os"
 	"time"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 var schema = `
@@ -27,14 +27,14 @@ CREATE TABLE version (
 `
 
 type Version struct {
-	Version string `json:"Version" db:"version"`
-	Released time.Time `json:"Released" db:"released"`
-	Build uint64 `json:"Build" db:"build"`
-	Prerelease bool `json:"Prerelease" db:"prerelease"`
-	Platform string `json:"Platform" db:"platform"`
-	Architecture string `json:"Architecture" db:"architecture"`
-	Installer bool `json:"Installer" db:"installer"`
-	Link string `json:"Link" db:"link"`
+	Version      string    `json:"Version" db:"version"`
+	Released     time.Time `json:"Released" db:"released"`
+	Build        uint64    `json:"Build" db:"build"`
+	Prerelease   bool      `json:"Prerelease" db:"prerelease"`
+	Platform     string    `json:"Platform" db:"platform"`
+	Architecture string    `json:"Architecture" db:"architecture"`
+	Installer    bool      `json:"Installer" db:"installer"`
+	Link         string    `json:"Link" db:"link"`
 }
 
 var db *sqlx.DB
@@ -55,17 +55,41 @@ func latest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(versions)
 }
 
-
-func latestStables(w http.ResponseWriter, r *http.Request)  {
+func latestStables(w http.ResponseWriter, r *http.Request) {
 	versions := []Version{}
 	db.Select(&versions, "SELECT * FROM version WHERE prerelease=false ORDER BY released DESC LIMIT 10")
 	json.NewEncoder(w).Encode(versions)
 }
 
-func latestPrereleases(w http.ResponseWriter, r *http.Request)  {
+func latestPrereleases(w http.ResponseWriter, r *http.Request) {
 	versions := []Version{}
 	db.Select(&versions, "SELECT * FROM version WHERE prerelease=true ORDER BY released DESC LIMIT 10")
 	json.NewEncoder(w).Encode(versions)
+}
+
+func removeRelease(w http.ResponseWriter, r *http.Request) {
+	version, exists := r.URL.Query()["v"]
+	build, exists := r.URL.Query()["b"]
+	platform, exists := r.URL.Query()["pl"]
+	architecture, exists := r.URL.Query()["a"]
+	key, exists := r.URL.Query()["key"]
+
+	if !exists {
+		fmt.Fprintf(w, "not all parameters specified")
+		return
+	}
+
+	if key[0] != os.Getenv("LOOP_API_KEY") {
+		fmt.Fprintf(w, "wrong key")
+		return
+	}
+
+	if rowExists("SELECT * FROM version WHERE version=$1 AND build=$2 AND platform=$3 AND architecture=$4", version[0], build[0], platform[0], architecture[0]) {
+		db.MustExec("DELETE FROM version WHERE version=$1 AND build=$2 AND platform=$3 AND architecture=$4", version[0], build[0], platform[0], architecture[0])
+		fmt.Fprintf(w, "ok")
+	} else {
+		fmt.Fprintf(w, "version doesnt exist")
+	}
 }
 
 // /add?v=1.0.0&r=1637702533&b=1&pr=0&pl=windows&a=x64&i=0&l=https%3A%2F%2Fs3.console.aws.amazon.com%2Fs3%2Fobject%2Floopartifacts%3Fregion%3Dus-east-2%26prefix%3DLoop%2Floop%2FPR-111-7%2Fjobs%2FLoop%2Floop%2FPR-111%2F7%2Floop.exe
@@ -113,5 +137,6 @@ func main() {
 	http.HandleFunc("/latest/prerelease", latestPrereleases)
 	http.HandleFunc("/latest/stable", latestStables)
 	http.HandleFunc("/add", addRelease)
+	http.HandleFunc("/remove", removeRelease)
 	log.Fatal(http.ListenAndServe(":1515", nil))
 }
